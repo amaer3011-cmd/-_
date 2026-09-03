@@ -172,3 +172,27 @@ class Database:
                 output.append(f"{r['id']} | {target} | {r['status']} | {r['error_message']} | {r['added_by']} | {r['timestamp']}")
             
             return "\n".join(output)
+
+    def is_user_already_added(self, user_id: int, channel_id: Optional[int] = None) -> bool:
+        """فحص ما إذا كان العضو تمت محاولة إضافته للقناة مسبقاً"""
+        if not user_id:
+            return False
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if channel_id:
+                cursor.execute("SELECT 1 FROM add_logs WHERE target_user_id = ? AND channel_id = ? LIMIT 1", (user_id, channel_id))
+            else:
+                cursor.execute("SELECT 1 FROM add_logs WHERE target_user_id = ? LIMIT 1", (user_id,))
+            return cursor.fetchone() is not None
+
+    def get_added_user_ids(self, channel_id: Optional[int] = None) -> set:
+        """جلب مجموعة المعرفات التي تمت إضافتها سابقاً للفحص السريع"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if channel_id:
+                cursor.execute("SELECT DISTINCT target_user_id FROM add_logs WHERE channel_id = ? AND target_user_id IS NOT NULL", (channel_id,))
+            else:
+                cursor.execute("SELECT DISTINCT target_user_id FROM add_logs WHERE target_user_id IS NOT NULL")
+            rows = cursor.fetchall()
+            return {r[0] for r in rows}
+

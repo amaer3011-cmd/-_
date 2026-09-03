@@ -93,8 +93,9 @@ class ForceSubscriptionBot:
         """إنشاء لوحة التحكم الرئيسية بأزرار شفافة"""
         return [
             [Button.inline("👤 إضافة عضو فردي", b"cmd_add_user"), Button.inline("👥 إضافة جماعية", b"cmd_bulk_add")],
-            [Button.inline("📊 الإحصائيات", b"cmd_stats"), Button.inline("📢 إدارة القناة", b"cmd_channel")],
-            [Button.inline("📥 تصدير السجل", b"cmd_export"), Button.inline("❓ المساعدة", b"cmd_help")]
+            [Button.inline("🔄 سحب ونقل الأعضاء", b"cmd_scrape_transfer"), Button.inline("📢 إدارة القناة", b"cmd_channel")],
+            [Button.inline("📊 الإحصائيات", b"cmd_stats"), Button.inline("📥 تصدير السجل", b"cmd_export")],
+            [Button.inline("❓ المساعدة", b"cmd_help")]
         ]
 
     def get_cancel_keyboard(self):
@@ -185,6 +186,10 @@ class ForceSubscriptionBot:
                 await event.answer()
                 await self.prompt_bulk_add(event)
 
+            elif data == b"cmd_scrape_transfer":
+                await event.answer()
+                await self.prompt_scrape_source(event)
+
             elif data == b"cmd_stats":
                 await event.answer()
                 await self.send_stats(event, edit=True)
@@ -209,9 +214,12 @@ class ForceSubscriptionBot:
             elif data == b"stop_bulk":
                 if sender_id in self.active_bulk_tasks:
                     self.active_bulk_tasks.remove(sender_id)
-                    await event.answer("🛑 جاري إيقاف عملية الإضافة الجماعية...", alert=True)
+                    await event.answer("🛑 جاري إيقاف العملية...", alert=True)
                 else:
-                    await event.answer("⚠️ لا توجد عملية إضافة جماعية نشطة حالياً.", alert=True)
+                    await event.answer("⚠️ لا توجد عملية نشطة حالياً.", alert=True)
+
+            elif data == b"confirm_scrape":
+                await self.execute_scrape_and_transfer(event)
 
             elif data.startswith(b"confirm_add:"):
                 user_key = data.decode().split(":")[1]
@@ -240,6 +248,15 @@ class ForceSubscriptionBot:
 
                 elif step == 'awaiting_bulk_users':
                     await self.process_bulk_users_input(event)
+
+                elif step == 'awaiting_scrape_source':
+                    await self.process_scrape_source_input(event)
+
+                elif step == 'awaiting_scrape_target':
+                    await self.process_scrape_target_input(event)
+
+                elif step == 'awaiting_scrape_count':
+                    await self.process_scrape_count_input(event)
 
                 elif step == 'awaiting_channel_id':
                     await self.process_new_channel_input(event)
@@ -592,6 +609,204 @@ class ForceSubscriptionBot:
             f"✅ **تمت الإضافة بنجاح:** `{success_count}`\n"
             f"❌ **تعذرت إضافتهم:** `{failed_count}`\n"
             f"🔒 **بسبب قيود الخصوصية:** `{privacy_count}`",
+            buttons=[[Button.inline("📥 تصدير التقرير", b"cmd_export"), Button.inline("🔙 الرئيسية", b"cmd_main")]]
+        )
+
+    async def prompt_scrape_source(self, event):
+        sender_id = event.sender_id
+        self.user_states[sender_id] = {'step': 'awaiting_scrape_source'}
+        text = (
+            "📋 **ميزة نقل وسحب الأعضاء الآلي (1/3)**\n\n"
+            "يرجى إرسال **معرّف أو رابط أو ID القناة المصدر** (التي سيتم سحب الأعضاء منها):\n"
+            "• مثال: `@SourceChannel` أو `-1001234567890`"
+        )
+        if isinstance(event, events.CallbackQuery.Event):
+            await event.edit(text, buttons=self.get_cancel_keyboard())
+        else:
+            await event.reply(text, buttons=self.get_cancel_keyboard())
+
+    async def process_scrape_source_input(self, event):
+        sender_id = event.sender_id
+        source_input = event.text.strip()
+
+        try:
+            target_obj = int(source_input) if source_input.replace("-", "").isdigit() else source_input
+            entity = await self.bot.get_entity(target_obj)
+            title = getattr(entity, 'title', str(entity.id))
+
+            self.user_states[sender_id] = {
+                'step': 'awaiting_scrape_target',
+                'source_entity': entity,
+                'source_title': title
+            }
+            await event.reply(
+                f"✅ **تم اختيار المصدر:** {title}\n\n"
+                "📌 **الآن أرسل معرّف أو ID القناة المستهدفة (التي تريد إضافة الأعضاء الجدد إليها):**",
+                buttons=self.get_cancel_keyboard()
+            )
+        except Exception as e:
+            await event.reply(f"❌ **تعذر التعرف على القناة المصدر:** {str(e)}\nتأكد من المعرّف أو أن البوت مشترك بها.")
+
+    async def process_scrape_target_input(self, event):
+        sender_id = event.sender_id
+        target_input = event.text.strip()
+        state = self.user_states.get(sender_id, {})
+
+        try:
+            target_obj = int(target_input) if target_input.replace("-", "").isdigit() else target_input
+            entity = await self.bot.get_entity(target_obj)
+            title = getattr(entity, 'title', str(entity.id))
+
+            state['target_entity'] = entity
+            state['target_title'] = title
+            state['step'] = 'awaiting_scrape_count'
+            self.user_states[sender_id] = state
+
+            await event.reply(
+                f"✅ **تم اختيار المستهدف:** {title}\n\n"
+                "🔢 **أدخل عدد الأعضاء المطلوب إضافتهم (مثال: `500`):**",
+                buttons=self.get_cancel_keyboard()
+            )
+        except Exception as e:
+            await event.reply(f"❌ **تعذر التعرف على القناة المستهدفة:** {str(e)}\nتأكد من المعرّف وأن البوت أدمن فيها.")
+
+    async def process_scrape_count_input(self, event):
+        sender_id = event.sender_id
+        count_input = event.text.strip()
+        state = self.user_states.get(sender_id, {})
+
+        if not count_input.isdigit() or int(count_input) <= 0:
+            await event.reply("❌ **برجاء كتابة رقم صحيح أكبر من 0 (مثال: 500).**", buttons=self.get_cancel_keyboard())
+            return
+
+        required_count = int(count_input)
+        state['required_count'] = required_count
+        state['step'] = 'confirm_scrape'
+        self.user_states[sender_id] = state
+
+        text = (
+            "📊 **تأكيد عملية نقل وسحب الأعضاء:**\n\n"
+            f"📤 **المصدر:** {state['source_title']}\n"
+            f"📥 **المستهدف:** {state['target_title']}\n"
+            f"🎯 **العدد المطلوب إضافته بنجاح:** `{required_count}` عضو\n\n"
+            "🔒 *سيقوم البوت بتخطي من تم إضافته سابقاً والاستمرار بسحب أعضاء جدد حتى اكتمال العدد بالضبط.*"
+        )
+        buttons = [
+            [Button.inline("🚀 بدء السحب والإضافة", b"confirm_scrape"), Button.inline("❌ إلغاء", b"cmd_cancel")]
+        ]
+        await event.reply(text, buttons=buttons)
+
+    async def execute_scrape_and_transfer(self, event):
+        sender_id = event.sender_id
+        state = self.user_states.get(sender_id, {})
+
+        source_entity = state.get('source_entity')
+        target_entity = state.get('target_entity')
+        required_count = state.get('required_count', 0)
+
+        if not source_entity or not target_entity or required_count <= 0:
+            await event.edit("❌ **انتهت صلاحية العملية.**", buttons=[[Button.inline("🔙 الرئيسية", b"cmd_main")]])
+            return
+
+        del self.user_states[sender_id]
+        self.active_bulk_tasks.add(sender_id)
+
+        stop_button = [[Button.inline("🛑 إيقاف عملية النقل", b"stop_bulk")]]
+        status_msg = await event.edit(
+            f"🚀 **بدء سحب ونقل الأعضاء...**\n\n"
+            f"🎯 الهدف: إضافة `{required_count}` عضو بنجاح إلى القناة المستهدفة.\n"
+            "⏳ جاري فحص وجلب الأعضاء من المصدر...",
+            buttons=stop_button
+        )
+
+        already_added = db.get_added_user_ids(target_entity.id)
+
+        success_count = 0
+        skipped_count = 0
+        privacy_count = 0
+        failed_count = 0
+
+        delay_min = int(os.getenv("DEFAULT_DELAY_MIN", "3"))
+        delay_max = int(os.getenv("DEFAULT_DELAY_MAX", "7"))
+
+        try:
+            # جلب الأعضاء من القناة المصدر
+            participants = await self.bot.get_participants(source_entity, limit=3000)
+        except Exception as e:
+            await status_msg.edit(f"❌ **فشل جلب أعضاء القناة المصدر:** {str(e)}", buttons=[[Button.inline("🔙 الرئيسية", b"cmd_main")]])
+            if sender_id in self.active_bulk_tasks:
+                self.active_bulk_tasks.remove(sender_id)
+            return
+
+        for user in participants:
+            if success_count >= required_count:
+                break
+
+            if sender_id not in self.active_bulk_tasks:
+                await status_msg.edit(
+                    f"⏹️ **تم إيقاف عملية النقل يدوياً.**\n\n"
+                    f"📊 **تم تزويد:** `{success_count}` / `{required_count}` عضو بنجاح.\n"
+                    f"⏭️ **تم تخطيهم (مكرر/خاص):** `{skipped_count + privacy_count}`",
+                    buttons=[[Button.inline("🔙 الرئيسية", b"cmd_main")]]
+                )
+                return
+
+            if user.bot or user.deleted:
+                skipped_count += 1
+                continue
+
+            if user.id in already_added:
+                skipped_count += 1
+                continue
+
+            try:
+                await self.bot(InviteToChannelRequest(target_entity.id, [user]))
+                success_count += 1
+                already_added.add(user.id)
+                db.log_add(user.id, user.username, f"{user.first_name or ''} {user.last_name or ''}".strip(), sender_id, "success", "", target_entity.id)
+
+            except UserPrivacyRestrictedError:
+                privacy_count += 1
+                already_added.add(user.id)
+                db.log_add(user.id, user.username, "", sender_id, "privacy_restricted", "إعدادات الخصوصية تمنع الإضافة", target_entity.id)
+            except UserAlreadyParticipantError:
+                success_count += 1
+                already_added.add(user.id)
+                db.log_add(user.id, user.username, "", sender_id, "already_participant", "موجود مسبقاً", target_entity.id)
+            except FloodWaitError as e:
+                db.log_add(user.id, user.username, "", sender_id, "flood_wait", f"انتظار {e.seconds}s", target_entity.id)
+                await status_msg.edit(f"⏳ **انتظار حماية التليجرام (FloodWait):** انتظر {e.seconds} ثانية...", buttons=stop_button)
+                await asyncio.sleep(e.seconds)
+            except Exception as e:
+                failed_count += 1
+                db.log_add(user.id, user.username, "", sender_id, "failed", str(e), target_entity.id)
+
+            # تحديث النشرة الحية كل 3 إضافات ناجحة أو في النهاية
+            if success_count % 3 == 0 or success_count == required_count:
+                try:
+                    await status_msg.edit(
+                        f"🔄 **تقدم عملية نقل وتزويد الأعضاء:**\n\n"
+                        f"🎯 **الهدف المطلوب:** `{required_count}` عضو\n"
+                        f"✅ **الناجحة حتى الآن:** `{success_count}`\n"
+                        f"⏭️ **تم تخطيهم (مكرر/خاص):** `{skipped_count + privacy_count}`\n"
+                        f"⏳ جاري سحب عضو جديد...",
+                        buttons=stop_button
+                    )
+                except Exception:
+                    pass
+
+            if sender_id in self.active_bulk_tasks:
+                await asyncio.sleep(random.randint(delay_min, delay_max))
+
+        if sender_id in self.active_bulk_tasks:
+            self.active_bulk_tasks.remove(sender_id)
+
+        await status_msg.edit(
+            f"🎉 **التقرير النهائي لـ عملية نقل وتزويد الأعضاء:**\n\n"
+            f"🎯 **العدد المطلوب:** `{required_count}`\n"
+            f"✅ **الإجمالي الناجح المضاف:** `{success_count}`\n"
+            f"⏭️ **الأعضاء المتخطون (مكرر/خصوصية):** `{skipped_count + privacy_count}`\n"
+            f"❌ **أخطاء:** `{failed_count}`",
             buttons=[[Button.inline("📥 تصدير التقرير", b"cmd_export"), Button.inline("🔙 الرئيسية", b"cmd_main")]]
         )
 
