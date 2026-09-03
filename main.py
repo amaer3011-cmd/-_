@@ -21,6 +21,7 @@ except ImportError:
                     os.environ.setdefault(key.strip(), val.strip().strip("'\""))
 
 from telethon import TelegramClient, events, Button, functions, types
+from telethon.sessions import StringSession
 from telethon.tl.functions.channels import InviteToChannelRequest, GetParticipantRequest
 from telethon.tl.types import Channel, Chat, User
 from telethon.errors import (
@@ -88,11 +89,24 @@ class ForceSubscriptionBot:
         participants = []
         seen_ids = set()
 
-        # 1. محاولة استخدام اليوزر بوت إذا كانت هناك جلسة حساب بشري متوفرة
+        # 1. محاولة استخدام اليوزر بوت عبر StringSession في .env أو ملف user_session.session
+        user_string = os.getenv("USERBOT_STRING_SESSION", "").strip()
         user_session_file = os.path.join(os.path.dirname(__file__), "user_session.session")
-        if os.path.exists(user_session_file):
+
+        userbot = None
+        if user_string:
+            try:
+                userbot = TelegramClient(StringSession(user_string), API_ID, API_HASH)
+            except Exception as e:
+                logger.warning(f"Failed to init StringSession: {e}")
+        elif os.path.exists(user_session_file):
             try:
                 userbot = TelegramClient('user_session', API_ID, API_HASH)
+            except Exception as e:
+                logger.warning(f"Failed to init file session: {e}")
+
+        if userbot:
+            try:
                 await userbot.connect()
                 if await userbot.is_user_authorized():
                     logger.info("⚡ استخدام محرك اليوزر بوت لسحب أعضاء القناة المصدر دون صلاحيات أدمن...")
@@ -105,6 +119,10 @@ class ForceSubscriptionBot:
                         return participants
             except Exception as e:
                 logger.warning(f"Userbot fallback scraping failed: {e}")
+                try:
+                    await userbot.disconnect()
+                except Exception:
+                    pass
 
         # 2. محاولة السحب المباشر عبر البوت (في حال كان المصدر جروب مفتوح أو البوت أدمن)
         try:
