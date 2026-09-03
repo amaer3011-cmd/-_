@@ -72,6 +72,16 @@ class ForceSubscriptionBot:
         # كاش سريع للكيانات بالذاكرة وقاعدة البيانات
         self.entity_cache: Dict[str, Any] = {}
 
+    @staticmethod
+    def generate_progress_bar(current: int, total: int, length: int = 12) -> str:
+        """توليد شريط تحميل بصري أنيق"""
+        if total <= 0:
+            return "░" * length
+        percent = min(1.0, current / total)
+        filled_length = int(length * percent)
+        bar = "█" * filled_length + "░" * (length - filled_length)
+        return f"`[{bar}] {int(percent * 100)}%`"
+
     async def get_cached_entity(self, target: Union[int, str]):
         """جلب الكيان من الكاش المزدوج (RAM + Database) لإنهاء التأخير الشبكي"""
         cache_key = str(target)
@@ -773,14 +783,17 @@ class ForceSubscriptionBot:
                 failed_count += 1
                 db.log_add(None, str(item), "", sender_id, "failed", str(e), target_channel)
 
-            # تحديث شريط التقدم كل 3 أعضاء أو في النهاية
-            if idx % 3 == 0 or idx == len(targets):
+            # تحديث شريط التحميل التفاعلي والتقدم كل 2 من الأعضاء أو عند النسبة النهائية
+            if idx % 2 == 0 or idx == len(targets):
                 try:
+                    progress_bar = self.generate_progress_bar(idx, len(targets))
                     await status_msg.edit(
-                        f"🔄 **تقدم عملية الإضافة الجماعية ({idx}/{len(targets)}):**\n\n"
-                        f"✅ ناجحة: `{success_count}`\n"
-                        f"❌ فاشلة: `{failed_count}` (منها `{privacy_count}` بسبب الخصوصية)\n"
-                        f"⏳ جاري الانتقال للعضو التالي...",
+                        f"🔄 **تقدم عملية الإضافة الجماعية:**\n"
+                        f"{progress_bar}\n\n"
+                        f"📊 **المكتمل:** `{idx}` / `{len(targets)}` عضو\n"
+                        f"✅ **ناجحة:** `{success_count}` | ❌ **فاشلة:** `{failed_count}`\n"
+                        f"🛡️ **تخطي الخصوصية:** `{privacy_count}` (تم التخطي والاجتياز الأوتوماتيكي)\n"
+                        f"⏳ جاري معالجة العضو التالي...",
                         buttons=stop_button
                     )
                 except Exception:
@@ -979,15 +992,17 @@ class ForceSubscriptionBot:
                 failed_count += 1
                 db.log_add(user.id, user.username, "", sender_id, "failed", str(e), target_entity.id)
 
-            # تحديث النشرة الحية كل 3 إضافات ناجحة أو في النهاية
-            if success_count % 3 == 0 or success_count == required_count:
+            # تحديث النشرة الحية وشريط التحميل التفاعلي
+            if success_count % 2 == 0 or success_count == required_count:
                 try:
+                    progress_bar = self.generate_progress_bar(success_count, required_count)
                     await status_msg.edit(
-                        f"🔄 **تقدم عملية نقل وتزويد الأعضاء:**\n\n"
+                        f"🔄 **تقدم عملية نقل وتزويد الأعضاء:**\n"
+                        f"{progress_bar}\n\n"
                         f"🎯 **الهدف المطلوب:** `{required_count}` عضو\n"
-                        f"✅ **الناجحة حتى الآن:** `{success_count}`\n"
-                        f"⏭️ **تم تخطيهم (مكرر/خاص):** `{skipped_count + privacy_count}`\n"
-                        f"⏳ جاري سحب عضو جديد...",
+                        f"✅ **المضاف بنجاح:** `{success_count}` / `{required_count}`\n"
+                        f"🛡️ **تخطي مكرر / خصوصية:** `{skipped_count + privacy_count}` (اجتياز آلي مستمر)\n"
+                        f"⏳ جاري سحب وتزويد عضو جديد...",
                         buttons=stop_button
                     )
                 except Exception:
