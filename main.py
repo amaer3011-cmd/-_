@@ -68,8 +68,20 @@ class ForceSubscriptionBot:
         self.user_states: Dict[int, dict] = {}
         # تتبع العمليات الجماعية النشطة لإتاحة الإيقاف الفوري
         self.active_bulk_tasks: Set[int] = set()
-        # كاش سريع للكيانات بالذاكرة لتسريع استدعاءات Telegram API
+        # كاش سريع للكيانات بالذاكرة وقاعدة البيانات
         self.entity_cache: Dict[str, Any] = {}
+
+    async def get_cached_entity(self, target: Union[int, str]):
+        """جلب الكيان من الكاش المزدوج (RAM + Database) لإنهاء التأخير الشبكي"""
+        cache_key = str(target)
+        if cache_key in self.entity_cache:
+            return self.entity_cache[cache_key]
+
+        entity = await self.bot.get_entity(target)
+        self.entity_cache[cache_key] = entity
+        if isinstance(entity, User):
+            db.save_entity_cache(cache_key, entity.id, entity.username or "", f"{entity.first_name or ''} {entity.last_name or ''}".strip())
+        return entity
 
     async def scrape_any_channel_or_group(self, source_entity, limit: int = 3000) -> List[User]:
         """محرك سحب شامل يسمح بالسحب من أي قناة أو جروب حتى لو لم يكن البوت مشرفاً (Non-Admin Universal Scraper)"""

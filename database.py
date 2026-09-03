@@ -57,6 +57,17 @@ class Database:
                 )
             """)
 
+            # جدول كاش الكيانات الدائم بالداتابيز لتسريع الأداء
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS entity_cache (
+                    entity_key TEXT PRIMARY KEY,
+                    entity_id INTEGER,
+                    username TEXT,
+                    name TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # الفهارس لسرعة الأداء واقتناص الإحصائيات الفورية
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON add_logs(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON add_logs(timestamp)")
@@ -198,4 +209,27 @@ class Database:
                 cursor.execute("SELECT DISTINCT target_user_id FROM add_logs WHERE target_user_id IS NOT NULL")
             rows = cursor.fetchall()
             return {r[0] for r in rows}
+
+    def save_entity_cache(self, key: str, entity_id: int, username: str, name: str):
+        """حفظ الكيان في كاش قاعدة البيانات"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO entity_cache (entity_key, entity_id, username, name, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(entity_key) DO UPDATE SET
+                    entity_id=excluded.entity_id,
+                    username=excluded.username,
+                    name=excluded.name,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (str(key), entity_id, username, name))
+            conn.commit()
+
+    def get_entity_cache(self, key: str) -> Optional[Dict[str, Any]]:
+        """جلب الكيان المحفوظ في كاش قاعدة البيانات"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM entity_cache WHERE entity_key = ?", (str(key),))
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
