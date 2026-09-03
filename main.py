@@ -67,10 +67,22 @@ class ForceSubscriptionBot:
         self.bot = TelegramClient('bot_session', API_ID, API_HASH)
         # حالات المستخدمين المؤقتة
         self.user_states: Dict[int, dict] = {}
-        # تتبع العمليات الجماعية النشطة لإتاحة الإيقاف الفوري
-        self.active_bulk_tasks: Set[int] = set()
         # كاش سريع للكيانات بالذاكرة وقاعدة البيانات
         self.entity_cache: Dict[str, Any] = {}
+        # عميل الحساب البشري لتنفيذ دعوات الإضافة دون قيود البوتات (Userbot Inviter)
+        self.userbot: Optional[TelegramClient] = None
+
+    async def get_inviter_client(self) -> TelegramClient:
+        """جلب عميل التنفيذ المناسب للإضافة: يفضل الحساب البشري (Userbot) إن وجد لتفادي خطأ قيود البوتات"""
+        if self.userbot:
+            try:
+                if not self.userbot.is_connected():
+                    await self.userbot.connect()
+                if await self.userbot.is_user_authorized():
+                    return self.userbot
+            except Exception as e:
+                logger.warning(f"Userbot client check failed: {e}")
+        return self.bot
 
     @staticmethod
     def generate_progress_bar(current: int, total: int, length: int = 12) -> str:
@@ -239,6 +251,25 @@ class ForceSubscriptionBot:
         await self.bot.start(bot_token=BOT_TOKEN)
         bot_me = await self.bot.get_me()
         logger.info(f"✅ تم تشغيل البوت بنجاح: @{bot_me.username}")
+
+        # محاولة تهيئة وتوصيل عميل الحساب البشري (Userbot) إن توفر
+        user_string = os.getenv("USERBOT_STRING_SESSION", "").strip()
+        user_session_file = os.path.join(os.path.dirname(__file__), "user_session.session")
+        try:
+            if user_string:
+                self.userbot = TelegramClient(StringSession(user_string), API_ID, API_HASH)
+                await self.userbot.connect()
+                if await self.userbot.is_user_authorized():
+                    ub_me = await self.userbot.get_me()
+                    logger.info(f"⚡ تم تفعيل عميل التنفيذ والإضافة للحساب البشري بنجاح: {ub_me.first_name}")
+            elif os.path.exists(user_session_file):
+                self.userbot = TelegramClient('user_session', API_ID, API_HASH)
+                await self.userbot.connect()
+                if await self.userbot.is_user_authorized():
+                    ub_me = await self.userbot.get_me()
+                    logger.info(f"⚡ تم تفعيل عميل التنفيذ والإضافة للحساب البشري بنجاح: {ub_me.first_name}")
+        except Exception as e:
+            logger.warning(f"Userbot initialization notice: {e}")
 
         self.register_handlers()
         await self.bot.run_until_disconnected()
@@ -663,7 +694,8 @@ class ForceSubscriptionBot:
         target_channel = active_chan['channel_id']
 
         try:
-            await self.bot(InviteToChannelRequest(target_channel, [user_info['entity']]))
+            inviter = await self.get_inviter_client()
+            await inviter(InviteToChannelRequest(target_channel, [user_info['entity']]))
             db.log_add(user_info['id'], user_info['username'], user_info['name'], sender_id, "success", "", target_channel)
 
             await event.edit(
@@ -807,7 +839,8 @@ class ForceSubscriptionBot:
                 entity = await self.get_cached_entity(target_obj)
 
                 if isinstance(entity, User):
-                    await self.bot(InviteToChannelRequest(target_channel, [entity]))
+                    inviter = await self.get_inviter_client()
+                    await inviter(InviteToChannelRequest(target_channel, [entity]))
                     success_count += 1
                     db.log_add(entity.id, entity.username, f"{entity.first_name or ''} {entity.last_name or ''}".strip(), sender_id, "success", "", target_channel)
                     await self.check_milestone_and_pause(sender_id, success_count, status_msg, notified_milestones, stop_button)
@@ -1017,7 +1050,8 @@ class ForceSubscriptionBot:
                 continue
 
             try:
-                await self.bot(InviteToChannelRequest(target_entity.id, [user]))
+                inviter = await self.get_inviter_client()
+                await inviter(InviteToChannelRequest(target_entity.id, [user]))
                 success_count += 1
                 already_added.add(user.id)
                 db.log_add(user.id, user.username, f"{user.first_name or ''} {user.last_name or ''}".strip(), sender_id, "success", "", target_entity.id)
