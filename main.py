@@ -269,6 +269,40 @@ class ForceSubscriptionBot:
                 except Exception as e:
                     logger.warning(f"⚠️ تعذر حذف رسالة الإشعار الخدمية: {e}")
 
+        @self.bot.on(events.NewMessage)
+        async def force_sub_gatekeeper(event):
+            """ميزة الاشتراك الإجباري الذكية: حظر استخدام البوت حتى يشترك المستخدم في القناة النشطة"""
+            if not event.is_private or not event.text:
+                return
+            sender_id = event.sender_id
+            if self.is_admin(sender_id):
+                return  # الأدمن غير خاضع للحظر
+
+            active_chan = db.get_active_channel()
+            if not active_chan:
+                return
+
+            channel_id = active_chan['channel_id']
+            try:
+                # التحقق مما إذا كان المستخدم عضواً في القناة النشطة
+                participant = await self.bot(GetParticipantRequest(channel=channel_id, participant=sender_id))
+            except Exception:
+                # إذا لم يكن عضواً، يتم قفل البوت وإجباره على الاشتراك
+                chan_title = active_chan['title']
+                chan_username = active_chan.get('username', '')
+                sub_url = f"https://t.me/{chan_username.replace('@', '')}" if chan_username else f"https://t.me/c/{str(channel_id).replace('-100', '')}/1"
+                
+                await event.reply(
+                    "⚠️ **عذراً، يجب عليك الاشتراك في القناة التالية أولاً لاستخدام البوت:**\n\n"
+                    f"📢 **القناة المطلوب الاشتراك بها:** {chan_title}\n\n"
+                    "👇 اضغط على الزر أدناه للاشتراك، ثم اضغط على **تأكيد الاشتراك ✅**:",
+                    buttons=[
+                        [Button.url("📢 اضغط هنا للاشتراك في القناة", sub_url)],
+                        [Button.inline("✅ تأكيد الاشتراك", b"check_force_sub")]
+                    ]
+                )
+                raise events.StopPropagation
+
         @self.bot.on(events.NewMessage(pattern=r'^/start$'))
         async def start_handler(event):
             sender_id = event.sender_id
@@ -281,7 +315,7 @@ class ForceSubscriptionBot:
             chan_id = active_chan['channel_id'] if active_chan else "لا يوجد"
 
             msg_text = (
-                "👋 **مرحباً بك في بوت الإضافة والإشتراك الإجباري المطور**\n\n"
+                "👋 **مرحباً بك في بوت الإضافة والإشتراك الإجباري المطور المكتمل**\n\n"
                 f"📢 **القناة النشطة حالياً:** {chan_name} (`{chan_id}`)\n"
                 "🔒 **الخصوصية:** تتم الإضافة دون إظهار أي بيانات للمُضيف.\n\n"
                 "اختر الخيار المطلوب من الأزرار التالية:"
@@ -315,6 +349,20 @@ class ForceSubscriptionBot:
         @self.bot.on(events.CallbackQuery)
         async def callback_handler(event):
             sender_id = event.sender_id
+            data = event.data
+
+            if data == b"check_force_sub":
+                active_chan = db.get_active_channel()
+                if active_chan:
+                    try:
+                        await self.bot(GetParticipantRequest(channel=active_chan['channel_id'], participant=sender_id))
+                        await event.answer("✅ تم تأكيد اشتراكك بنجاح! يمكنك الآن استخدام البوت.", alert=True)
+                        await event.edit("🎉 **شكراً لاشتراكك!** يمكنك الآن الاستفادة من خدمات البوت بالكامل.")
+                        return
+                    except Exception:
+                        await event.answer("❌ لم يتم العثور على اشتراكك في القناة حتى الآن! برجاء الاشتراك أولاً.", alert=True)
+                        return
+
             if not self.is_admin(sender_id):
                 await event.answer("⛔ غير مسموح لك باستخدام هذا البوت.", alert=True)
                 return
