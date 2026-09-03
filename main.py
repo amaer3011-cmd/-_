@@ -493,6 +493,50 @@ class ForceSubscriptionBot:
             if sender_id in self.user_states:
                 del self.user_states[sender_id]
 
+    async def check_milestone_and_pause(self, sender_id: int, success_count: int, status_msg, notified_set: Set[int], stop_button):
+        """ميزة 4 و 5: التوقف الآلي الدوري (Smart Auto-Pause) وإشعارات الإنجاز التقدمية (Milestones Alerts)"""
+        milestone_step = int(os.getenv("MILESTONE_STEP", "50"))
+        pause_every = int(os.getenv("PAUSE_EVERY_N_USERS", "50"))
+        pause_mins = int(os.getenv("PAUSE_DURATION_MINUTES", "3"))
+
+        # ميزة 5: إرسال إشعار الإنجاز فور الوصول للمضاعفات (Milestones)
+        if milestone_step > 0 and success_count > 0 and success_count % milestone_step == 0 and success_count not in notified_set:
+            notified_set.add(success_count)
+            try:
+                await self.bot.send_message(
+                    sender_id,
+                    f"🎉 **إشعار إنجاز جديد (Milestone Alert)!**\n\n"
+                    f"✅ تم تزويد وإضافة **{success_count}** عضو بنجاح في العملية الجارية!\n"
+                    f"📊 استقرار النظام ممتاز والعملية مستمرة بأمان."
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send milestone alert: {e}")
+
+        # ميزة 4: الجدولة والتوقف الدوري التلقائي (Smart Auto-Pause)
+        if pause_every > 0 and success_count > 0 and success_count % pause_every == 0:
+            if not hasattr(self, '_paused_counts'):
+                self._paused_counts = set()
+            if success_count not in self._paused_counts:
+                self._paused_counts.add(success_count)
+                pause_seconds = pause_mins * 60
+                logger.info(f"⏳ تطبيق الاستراحة الذكية: التوقف لمدة {pause_mins} دقائق بعد إضافة {success_count} عضو...")
+                
+                try:
+                    await status_msg.edit(
+                        f"⏳ **استراحة أمان آلي (Smart Auto-Pause):**\n\n"
+                        f"✅ تم إكمال إضافة `{success_count}` عضو بنجاح!\n"
+                        f"☕ لحماية الحساب وسيرفرات تليجرام من الحظر، يتم أخذ استراحة لمدة `{pause_mins}` دقيقة تلقائياً.\n"
+                        f"⏳ ستستأنف الإضافة فوراً بعد انقضاء الاستراحة...",
+                        buttons=stop_button
+                    )
+                except Exception:
+                    pass
+
+                elapsed = 0
+                while elapsed < pause_seconds and sender_id in self.active_bulk_tasks:
+                    await asyncio.sleep(5)
+                    elapsed += 5
+
     async def process_bulk_users_input(self, event):
         sender_id = event.sender_id
         text_content = ""
@@ -539,6 +583,7 @@ class ForceSubscriptionBot:
         success_count = 0
         failed_count = 0
         privacy_count = 0
+        notified_milestones = set()
 
         delay_min = int(os.getenv("DEFAULT_DELAY_MIN", "3"))
         delay_max = int(os.getenv("DEFAULT_DELAY_MAX", "7"))
@@ -563,6 +608,7 @@ class ForceSubscriptionBot:
                     await self.bot(InviteToChannelRequest(target_channel, [entity]))
                     success_count += 1
                     db.log_add(entity.id, entity.username, f"{entity.first_name or ''} {entity.last_name or ''}".strip(), sender_id, "success", "", target_channel)
+                    await self.check_milestone_and_pause(sender_id, success_count, status_msg, notified_milestones, stop_button)
                 else:
                     failed_count += 1
                     db.log_add(None, str(item), "", sender_id, "failed", "ليس حساب مستخدم", target_channel)
@@ -574,6 +620,7 @@ class ForceSubscriptionBot:
             except UserAlreadyParticipantError:
                 success_count += 1
                 db.log_add(None, str(item), "", sender_id, "already_participant", "موجود مسبقاً", target_channel)
+                await self.check_milestone_and_pause(sender_id, success_count, status_msg, notified_milestones, stop_button)
             except FloodWaitError as e:
                 db.log_add(None, str(item), "", sender_id, "flood_wait", f"انتظار {e.seconds}s", target_channel)
                 await status_msg.edit(f"⏳ **انتظار حماية التليجرام (FloodWait):** انتظر {e.seconds} ثانية...", buttons=stop_button)
@@ -725,6 +772,7 @@ class ForceSubscriptionBot:
         skipped_count = 0
         privacy_count = 0
         failed_count = 0
+        notified_milestones = set()
 
         delay_min = int(os.getenv("DEFAULT_DELAY_MIN", "3"))
         delay_max = int(os.getenv("DEFAULT_DELAY_MAX", "7"))
@@ -764,6 +812,7 @@ class ForceSubscriptionBot:
                 success_count += 1
                 already_added.add(user.id)
                 db.log_add(user.id, user.username, f"{user.first_name or ''} {user.last_name or ''}".strip(), sender_id, "success", "", target_entity.id)
+                await self.check_milestone_and_pause(sender_id, success_count, status_msg, notified_milestones, stop_button)
 
             except UserPrivacyRestrictedError:
                 privacy_count += 1
@@ -773,6 +822,7 @@ class ForceSubscriptionBot:
                 success_count += 1
                 already_added.add(user.id)
                 db.log_add(user.id, user.username, "", sender_id, "already_participant", "موجود مسبقاً", target_entity.id)
+                await self.check_milestone_and_pause(sender_id, success_count, status_msg, notified_milestones, stop_button)
             except FloodWaitError as e:
                 db.log_add(user.id, user.username, "", sender_id, "flood_wait", f"انتظار {e.seconds}s", target_entity.id)
                 await status_msg.edit(f"⏳ **انتظار حماية التليجرام (FloodWait):** انتظر {e.seconds} ثانية...", buttons=stop_button)
