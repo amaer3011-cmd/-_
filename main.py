@@ -788,11 +788,44 @@ class ForceSubscriptionBot:
         delay_min = int(os.getenv("DEFAULT_DELAY_MIN", "3"))
         delay_max = int(os.getenv("DEFAULT_DELAY_MAX", "7"))
 
+        participants = []
         try:
-            # جلب الأعضاء من القناة المصدر
+            # محاولة 1: جلب قائمة الأعضاء الكاملة
             participants = await self.bot.get_participants(source_entity, limit=3000)
         except Exception as e:
-            await status_msg.edit(f"❌ **فشل جلب أعضاء القناة المصدر:** {str(e)}", buttons=[[Button.inline("🔙 الرئيسية", b"cmd_main")]])
+            logger.warning(f"get_participants failed, trying message senders fallback: {e}")
+            try:
+                # محاولة 2 (Fallback): سحب المرسالين والأعضاء المتفاعلين من أحدث الرسائل
+                await status_msg.edit(
+                    "💡 **ملاحظة حماية تليجرام:** البوت ليس أدمن في القناة المصدر.\n"
+                    "🔄 **جاري السحب الذكي للأعضاء المتفاعلين من أحدث رسائل المصدر...**",
+                    buttons=stop_button
+                )
+                seen_users = set()
+                async for msg in self.bot.iter_messages(source_entity, limit=2500):
+                    if msg.sender and isinstance(msg.sender, User) and msg.sender.id not in seen_users:
+                        seen_users.add(msg.sender.id)
+                        participants.append(msg.sender)
+            except Exception as ex:
+                await status_msg.edit(
+                    "❌ **خطأ في صلاحيات القناة المصدر:**\n\n"
+                    "تليجرام يمنع البوتات من سحب أعضاء هذا النوع من القنوات إلا إذا كان البوت مشرفاً (Admin).\n\n"
+                    "💡 **لحل هذه المشكلة وسحب الأعضاء فوراً:**\n"
+                    "1️⃣ **الخيار الأول:** قم بإضافة البوت كـ أدمن في القناة المصدر.\n"
+                    "2️⃣ **الخيار الثاني:** اختر مجموعة (Group) بدلاً من القنوات المغلقة.\n"
+                    "3️⃣ **الخيار الثالث:** استخدم ميزة **الإضافة الجماعية (`/bulk_add`)** وأرسل قائمة اليوزرات مباشرة.",
+                    buttons=[[Button.inline("👥 إضافة جماعية", b"cmd_bulk_add"), Button.inline("🔙 الرئيسية", b"cmd_main")]]
+                )
+                if sender_id in self.active_bulk_tasks:
+                    self.active_bulk_tasks.remove(sender_id)
+                return
+
+        if not participants:
+            await status_msg.edit(
+                "❌ **لم يتم العثور على أية أعضاء يمكن سحبهم من القناة المصدر.**\n\n"
+                "تأكد من وجود أعضاء أو رسائل نشطة في المصدر.",
+                buttons=[[Button.inline("🔙 الرئيسية", b"cmd_main")]]
+            )
             if sender_id in self.active_bulk_tasks:
                 self.active_bulk_tasks.remove(sender_id)
             return
