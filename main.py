@@ -20,7 +20,7 @@ except ImportError:
                     key, val = line.split("=", 1)
                     os.environ.setdefault(key.strip(), val.strip().strip("'\""))
 
-from telethon import TelegramClient, events, Button
+from telethon import TelegramClient, events, Button, functions
 from telethon.tl.functions.channels import InviteToChannelRequest, GetParticipantRequest
 from telethon.tl.types import Channel, Chat, User
 from telethon.errors import (
@@ -71,14 +71,72 @@ class ForceSubscriptionBot:
         # كاش سريع للكيانات بالذاكرة لتسريع استدعاءات Telegram API
         self.entity_cache: Dict[str, Any] = {}
 
-    async def get_cached_entity(self, target: Union[int, str]):
-        """جلب الكيان من الكاش السريع أو من تليجرام عند عدم وجوده"""
-        cache_key = str(target)
-        if cache_key in self.entity_cache:
-            return self.entity_cache[cache_key]
-        entity = await self.bot.get_entity(target)
-        self.entity_cache[cache_key] = entity
-        return entity
+    async def scrape_any_channel_or_group(self, source_entity, limit: int = 3000) -> List[User]:
+        """محرك سحب شامل يسمح بالسحب من أي قناة أو جروب حتى لو لم يكن البوت مشرفاً (Non-Admin Universal Scraper)"""
+        participants = []
+        seen_ids = set()
+
+        # 1. محاولة استخدام اليوزر بوت إذا كانت هناك جلسة حساب بشري متوفرة
+        user_session_file = os.path.join(os.path.dirname(__file__), "user_session.session")
+        if os.path.exists(user_session_file):
+            try:
+                userbot = TelegramClient('user_session', API_ID, API_HASH)
+                await userbot.connect()
+                if await userbot.is_user_authorized():
+                    logger.info("⚡ استخدام محرك اليوزر بوت لسحب أعضاء القناة المصدر دون صلاحيات أدمن...")
+                    async for user in userbot.iter_participants(source_entity, limit=limit):
+                        if isinstance(user, User) and user.id not in seen_ids:
+                            seen_ids.add(user.id)
+                            participants.append(user)
+                    await userbot.disconnect()
+                    if participants:
+                        return participants
+            except Exception as e:
+                logger.warning(f"Userbot fallback scraping failed: {e}")
+
+        # 2. محاولة السحب المباشر عبر البوت (في حال كان المصدر جروب مفتوح أو البوت أدمن)
+        try:
+            async for user in self.bot.iter_participants(source_entity, limit=limit):
+                if isinstance(user, User) and user.id not in seen_ids:
+                    seen_ids.add(user.id)
+                    participants.append(user)
+            if participants:
+                return participants
+        except Exception as e:
+            logger.warning(f"Bot iter_participants failed: {e}")
+
+        # 3. محاولة سحب المرسالين المتفاعلين من أحدث منشورات ورسائل القناة
+        try:
+            logger.info("🔄 سحب الأعضاء المتفاعلين والمرسلين من منشورات القناة المصدر...")
+            async for msg in self.bot.iter_messages(source_entity, limit=2500):
+                if msg.sender and isinstance(msg.sender, User) and msg.sender.id not in seen_ids:
+                    seen_ids.add(msg.sender.id)
+                    participants.append(msg.sender)
+                if msg.fwd_from and msg.fwd_from.from_id:
+                    try:
+                        fwd_user = await self.get_cached_entity(msg.fwd_from.from_id)
+                        if isinstance(fwd_user, User) and fwd_user.id not in seen_ids:
+                            seen_ids.add(fwd_user.id)
+                            participants.append(fwd_user)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"Iter_messages scraping failed: {e}")
+
+        # 4. محاولة سحب مجموعة المناقشات والتعليقات المرتبطة بالقناة (Linked Discussion Group)
+        try:
+            full_chat = await self.bot(functions.channels.GetFullChannelRequest(source_entity))
+            if full_chat.full_chat.linked_chat_id:
+                linked_group = await self.get_cached_entity(full_chat.full_chat.linked_chat_id)
+                logger.info(f"📢 العثور على جروب المناقشات المرتبط بالقناة: {linked_group.id}")
+                async for user in self.bot.iter_participants(linked_group, limit=limit):
+                    if isinstance(user, User) and user.id not in seen_ids:
+                        seen_ids.add(user.id)
+                        participants.append(user)
+        except Exception as e:
+            logger.warning(f"Linked discussion group scraping failed: {e}")
+
+        return participants
 
     def is_admin(self, user_id: int) -> bool:
         """فحص ما إذا كان المستخدم مسؤولاً"""
@@ -788,37 +846,8 @@ class ForceSubscriptionBot:
         delay_min = int(os.getenv("DEFAULT_DELAY_MIN", "3"))
         delay_max = int(os.getenv("DEFAULT_DELAY_MAX", "7"))
 
-        participants = []
-        try:
-            # محاولة 1: جلب قائمة الأعضاء الكاملة
-            participants = await self.bot.get_participants(source_entity, limit=3000)
-        except Exception as e:
-            logger.warning(f"get_participants failed, trying message senders fallback: {e}")
-            try:
-                # محاولة 2 (Fallback): سحب المرسالين والأعضاء المتفاعلين من أحدث الرسائل
-                await status_msg.edit(
-                    "💡 **ملاحظة حماية تليجرام:** البوت ليس أدمن في القناة المصدر.\n"
-                    "🔄 **جاري السحب الذكي للأعضاء المتفاعلين من أحدث رسائل المصدر...**",
-                    buttons=stop_button
-                )
-                seen_users = set()
-                async for msg in self.bot.iter_messages(source_entity, limit=2500):
-                    if msg.sender and isinstance(msg.sender, User) and msg.sender.id not in seen_users:
-                        seen_users.add(msg.sender.id)
-                        participants.append(msg.sender)
-            except Exception as ex:
-                await status_msg.edit(
-                    "❌ **خطأ في صلاحيات القناة المصدر:**\n\n"
-                    "تليجرام يمنع البوتات من سحب أعضاء هذا النوع من القنوات إلا إذا كان البوت مشرفاً (Admin).\n\n"
-                    "💡 **لحل هذه المشكلة وسحب الأعضاء فوراً:**\n"
-                    "1️⃣ **الخيار الأول:** قم بإضافة البوت كـ أدمن في القناة المصدر.\n"
-                    "2️⃣ **الخيار الثاني:** اختر مجموعة (Group) بدلاً من القنوات المغلقة.\n"
-                    "3️⃣ **الخيار الثالث:** استخدم ميزة **الإضافة الجماعية (`/bulk_add`)** وأرسل قائمة اليوزرات مباشرة.",
-                    buttons=[[Button.inline("👥 إضافة جماعية", b"cmd_bulk_add"), Button.inline("🔙 الرئيسية", b"cmd_main")]]
-                )
-                if sender_id in self.active_bulk_tasks:
-                    self.active_bulk_tasks.remove(sender_id)
-                return
+        # استدعاء محرك السحب الشامل (Universal Non-Admin Scraper)
+        participants = await self.scrape_any_channel_or_group(source_entity, limit=3000)
 
         if not participants:
             await status_msg.edit(
