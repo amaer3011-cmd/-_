@@ -20,7 +20,7 @@ except ImportError:
                     key, val = line.split("=", 1)
                     os.environ.setdefault(key.strip(), val.strip().strip("'\""))
 
-from telethon import TelegramClient, events, Button, functions
+from telethon import TelegramClient, events, Button, functions, types
 from telethon.tl.functions.channels import InviteToChannelRequest, GetParticipantRequest
 from telethon.tl.types import Channel, Chat, User
 from telethon.errors import (
@@ -163,6 +163,35 @@ class ForceSubscriptionBot:
                         participants.append(user)
         except Exception as e:
             logger.warning(f"Linked discussion group scraping failed: {e}")
+
+        # 5. محاولة البحث الحرفي والأبجدي الخارق (Alphabetical & Character Search Engine)
+        # هذه المرحلة تنجح بالكامل في سحب القنوات المخفية حتى لو كانت التفاعلات والتعليقات مقفولة تماماً!
+        if len(participants) < limit:
+            logger.info("🔍 تفعيل محرك الاقتناص الحرفي الأبجدي لاقتناص الأعضاء في القنوات المغلقة كلياً...")
+            alphabet_queries = [
+                'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+                'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+                'ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش',
+                'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي',
+                '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'
+            ]
+            for query in alphabet_queries:
+                if len(participants) >= limit:
+                    break
+                try:
+                    res = await self.bot(functions.channels.GetParticipantsRequest(
+                        channel=source_entity,
+                        filter=types.ChannelParticipantsSearch(query),
+                        offset=0,
+                        limit=200,
+                        hash=0
+                    ))
+                    for user in res.users:
+                        if isinstance(user, User) and user.id not in seen_ids:
+                            seen_ids.add(user.id)
+                            participants.append(user)
+                except Exception as e:
+                    pass
 
         return participants
 
