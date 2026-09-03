@@ -117,10 +117,10 @@ class ForceSubscriptionBot:
         except Exception as e:
             logger.warning(f"Bot iter_participants failed: {e}")
 
-        # 3. محاولة سحب المرسالين المتفاعلين من أحدث منشورات ورسائل القناة
+        # 3. محاولة سحب المرسالين المتفاعلين والمُعلقين من منشورات وتفاعلات القناة (Reactions & Comments)
         try:
-            logger.info("🔄 سحب الأعضاء المتفاعلين والمرسلين من منشورات القناة المصدر...")
-            async for msg in self.bot.iter_messages(source_entity, limit=2500):
+            logger.info("🔄 سحب الأعضاء المتفاعلين والمرسلين والمُعلقين من القناة المصدر...")
+            async for msg in self.bot.iter_messages(source_entity, limit=1500):
                 if msg.sender and isinstance(msg.sender, User) and msg.sender.id not in seen_ids:
                     seen_ids.add(msg.sender.id)
                     participants.append(msg.sender)
@@ -132,8 +132,24 @@ class ForceSubscriptionBot:
                             participants.append(fwd_user)
                     except Exception:
                         pass
+
+                # سحب الأشخاص الذين وضعوا تفاعلات (Reactions) على المنشورات
+                if getattr(msg, 'reactions', None):
+                    try:
+                        res = await self.bot(functions.messages.GetMessageReactionsListRequest(
+                            peer=source_entity,
+                            id=msg.id,
+                            limit=100
+                        ))
+                        for reaction in res.reactions:
+                            user = await self.get_cached_entity(reaction.peer_id)
+                            if isinstance(user, User) and user.id not in seen_ids:
+                                seen_ids.add(user.id)
+                                participants.append(user)
+                    except Exception:
+                        pass
         except Exception as e:
-            logger.warning(f"Iter_messages scraping failed: {e}")
+            logger.warning(f"Iter_messages and reactions scraping failed: {e}")
 
         # 4. محاولة سحب مجموعة المناقشات والتعليقات المرتبطة بالقناة (Linked Discussion Group)
         try:
