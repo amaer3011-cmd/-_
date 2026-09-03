@@ -1,0 +1,20 @@
+# Telegram Sessions & Credentials
+.env
+*.session
+*.session-journal
+bot_session
+user_session
+
+# Database & Logs
+*.db
+*.sqlite
+*.log
+add_logs.txt
+logs.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
