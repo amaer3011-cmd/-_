@@ -68,6 +68,17 @@ class ForceSubscriptionBot:
         self.user_states: Dict[int, dict] = {}
         # تتبع العمليات الجماعية النشطة لإتاحة الإيقاف الفوري
         self.active_bulk_tasks: Set[int] = set()
+        # كاش سريع للكيانات بالذاكرة لتسريع استدعاءات Telegram API
+        self.entity_cache: Dict[str, Any] = {}
+
+    async def get_cached_entity(self, target: Union[int, str]):
+        """جلب الكيان من الكاش السريع أو من تليجرام عند عدم وجوده"""
+        cache_key = str(target)
+        if cache_key in self.entity_cache:
+            return self.entity_cache[cache_key]
+        entity = await self.bot.get_entity(target)
+        self.entity_cache[cache_key] = entity
+        return entity
 
     def is_admin(self, user_id: int) -> bool:
         """فحص ما إذا كان المستخدم مسؤولاً"""
@@ -600,9 +611,9 @@ class ForceSubscriptionBot:
                 return
 
             try:
-                # التعرف على الكيان
+                # التعرف على الكيان باستخدام الكاش السريع
                 target_obj = int(item) if item.isdigit() else item
-                entity = await self.bot.get_entity(target_obj)
+                entity = await self.get_cached_entity(target_obj)
 
                 if isinstance(entity, User):
                     await self.bot(InviteToChannelRequest(target_channel, [entity]))
